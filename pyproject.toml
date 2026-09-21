@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-ocr"
+version = "1.0.0"
+description = "Fast, local, private OCR engine for images and PDFs with Python library and CLI interfaces."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "horohoro" }
+]
+keywords = ["ocr", "rapidocr", "pdf", "image", "document-processing", "text-extraction"]
+dependencies = [
+    "rapidocr-onnxruntime>=1.2.0",
+    "pymupdf>=1.20.0"
+]
+
+[project.scripts]
+local-ocr = "local_ocr.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["local_ocr*"]
+
+[tool.setuptools.package-data]
+local_ocr = ["models/*"]
+

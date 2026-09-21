@@ -1,0 +1,46 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Reports and benchmark artifacts (contains local paths/datasets)
+reports/
+*.report
+*.log
+
+# Unit test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Editor / IDE settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating system files
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Temporary scratch and OCR outputs
+scratch/
+*.tmp
+*.ocr.txt

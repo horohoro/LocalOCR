@@ -265,6 +265,12 @@ local-ocr detect-lang ./receipt.png
 
 ---
 
-## License
+## 📄 License & Commercial Rights
 
-MIT License
+Copyright (c) 2026 **horohoro** ([github.com/horohoro](https://github.com/horohoro)).
+
+This repository is licensed under **[Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)](LICENSE)**:
+- **Personal / Non-Commercial Use**: You are free to use, copy, modify, and study this project for personal, academic, or non-commercial purposes.
+- **Commercial Use**: Any commercial use, commercial distribution, or incorporation into a paid product/service is strictly prohibited without explicit permission or a commercial license agreement.
+
+📩 **For commercial licensing inquiries**: Please contact **horohoro** directly on GitHub (https://github.com/horohoro).

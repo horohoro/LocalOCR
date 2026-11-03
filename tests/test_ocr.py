@@ -353,6 +353,95 @@ class TestJapaneseAndOrientation(unittest.TestCase):
             self.assertIn("生きている", data["full_text"])
 
 
+    def test_all_card_orthogonal_rotations(self):
+        import cv2
+        if os.path.exists(self.sample):
+            img = cv2.imread(self.sample)
+            for rot_deg, rot_flag in [
+                (0, None),
+                (90, cv2.ROTATE_90_CLOCKWISE),
+                (180, cv2.ROTATE_180),
+                (270, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            ]:
+                rot_img = cv2.rotate(img, rot_flag) if rot_flag is not None else img
+                _, buf = cv2.imencode(".png", rot_img)
+                res = self.engine_ja.process(buf.tobytes())
+                self.assertIn("生きている", res.full_text, f"Failed on card rotation {rot_deg} deg")
+
+
+class TestPageConsensusAndRotation(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.engine_en = LocalOCR(lang="ch")
+        cls.engine_ja = LocalOCR(lang="ja")
+
+    def _create_synthetic_invoice(self):
+        from PIL import Image, ImageDraw, ImageFont
+        import cv2
+        import numpy as np
+        img = Image.new("RGB", (600, 400), color="white")
+        draw = ImageDraw.Draw(img)
+        try:
+            font = ImageFont.truetype("arial.ttf", 24)
+        except Exception:
+            font = None
+
+        draw.text((50, 40), "INVOICE STATEMENT 2026", fill="black", font=font)
+        draw.text((50, 90), "Company: Acme Corp Global", fill="black", font=font)
+        draw.text((50, 140), "Amount: 116,000 USD", fill="black", font=font)
+        draw.text((50, 190), "Account: 740862", fill="black", font=font)
+        draw.text((50, 240), "Due Date: 2026-12-31", fill="black", font=font)
+        draw.text((50, 290), "Thank you for your business!", fill="black", font=font)
+        return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+
+    def test_full_page_reading_order_across_rotations(self):
+        import cv2
+        doc = self._create_synthetic_invoice()
+        for rot_deg, rot_flag in [
+            (0, None),
+            (90, cv2.ROTATE_90_CLOCKWISE),
+            (180, cv2.ROTATE_180),
+            (270, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        ]:
+            rot_img = cv2.rotate(doc, rot_flag) if rot_flag is not None else doc
+            _, buf = cv2.imencode(".png", rot_img)
+            res = self.engine_en.process(buf.tobytes())
+
+            self.assertGreaterEqual(len(res.lines), 5, f"Expected >= 5 lines at rot {rot_deg}")
+            # Line 0 must be header/title
+            self.assertIn("STATEMENT", res.lines[0].text, f"Line 0 expected header at rot {rot_deg}")
+            # Line 2 must be amount
+            self.assertIn("116,000", res.lines[2].text, f"Line 2 expected amount at rot {rot_deg}")
+            # Line 3 must be account
+            self.assertIn("740862", res.lines[3].text, f"Line 3 expected account at rot {rot_deg}")
+            # Last line must be footer
+            self.assertIn("business", res.lines[-1].text, f"Last line expected footer at rot {rot_deg}")
+
+    def test_numeric_box_locking(self):
+        from PIL import Image, ImageDraw, ImageFont
+        import cv2
+        import numpy as np
+
+        for num_str in ["116000", "740862"]:
+            img = Image.new("RGB", (250, 60), color="white")
+            draw = ImageDraw.Draw(img)
+            try:
+                font = ImageFont.truetype("arial.ttf", 26)
+            except Exception:
+                font = None
+            draw.text((10, 15), num_str, fill="black", font=font)
+            arr = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+            _, buf = cv2.imencode(".png", arr)
+
+            # Test in both English and Japanese engines
+            for eng in [self.engine_en, self.engine_ja]:
+                res = eng.process(buf.tobytes())
+                self.assertIn(num_str, res.full_text, f"Failed to preserve numeric string '{num_str}'")
+                # Ensure it did not invert upside down to '000911' or pseudo-kana
+                self.assertNotIn("000911", res.full_text)
+                self.assertNotIn("そ2980", res.full_text)
+
+
 if __name__ == "__main__":
     unittest.main()
 

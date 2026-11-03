@@ -101,6 +101,13 @@ class LocalOCR:
                 unrot.append([x, y])
         return unrot
 
+    @staticmethod
+    def _is_numeric_or_symbol(text: str) -> bool:
+        if not text:
+            return False
+        cleaned = re.sub(r'[\s0-9,.\-+/$¥€#*:\\%_()\[\]=~"\'!?<>@&;]+', '', text)
+        return len(cleaned) == 0
+
     def _score_candidate(self, text: str, conf: float) -> float:
         if not text or conf <= 0:
             return 0.0
@@ -118,6 +125,61 @@ class LocalOCR:
             bonus = 1.0 * (words / total_len)
 
         return conf * (1.0 + bonus)
+
+    def _determine_page_consensus(self, img: np.ndarray, dt_boxes: Any) -> int:
+        if dt_boxes is None or len(dt_boxes) == 0:
+            return 0
+
+        tall_area = 0.0
+        tot_area = 0.0
+        for b in dt_boxes:
+            xs = [p[0] for p in b]
+            ys = [p[1] for p in b]
+            bw = max(1.0, max(xs) - min(xs))
+            bh = max(1.0, max(ys) - min(ys))
+            area = bw * bh
+            tot_area += area
+            if bh / bw >= 1.0:
+                tall_area += area
+        tall_ratio = tall_area / max(1.0, tot_area)
+
+        def score_img_orientation(c_img: np.ndarray) -> float:
+            boxes, _ = self.engine.text_detector(c_img)
+            if boxes is None or len(boxes) == 0:
+                return 0.0
+            sorted_b = self.engine.sorted_boxes(boxes)
+            sample = sorted_b[:min(5, len(sorted_b))]
+            crops = self.engine.get_crop_img_list(c_img, sample)
+            recs, _ = self.engine.text_recognizer(crops)
+            return sum(self._score_candidate(txt, float(conf)) for txt, conf in recs)
+
+        if tall_ratio >= 0.45:
+            # Sideways text lines: test 90 CW and 270 CW (and 0 as fallback for vertical text)
+            img_90 = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+            img_270 = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+            s_90 = score_img_orientation(img_90)
+            s_270 = score_img_orientation(img_270)
+            s_0 = score_img_orientation(img)
+
+            if s_0 > max(s_90, s_270) and s_0 > 1.0 and max(s_90, s_270) < 0.5:
+                return 0
+            return 90 if s_90 > s_270 else 270
+        else:
+            # Horizontal text lines: test 0 vs 180
+            sorted_b = self.engine.sorted_boxes(dt_boxes)
+            sample = sorted_b[:min(5, len(sorted_b))]
+            crops_0 = self.engine.get_crop_img_list(img, sample)
+            recs_0, _ = self.engine.text_recognizer(crops_0)
+            s_0 = sum(self._score_candidate(txt, float(conf)) for txt, conf in recs_0)
+
+            crops_180 = [self._rotate_crop(c, 180) for c in crops_0]
+            recs_180, _ = self.engine.text_recognizer(crops_180)
+            s_180 = sum(self._score_candidate(txt, float(conf)) for txt, conf in recs_180)
+
+            if s_180 > s_0 * 1.15:
+                return 180
+            return 0
 
     def _recognize_boxes(self, img: np.ndarray, dt_boxes: Any) -> Optional[List[List[Any]]]:
         img_crop_list = self.engine.get_crop_img_list(img, dt_boxes)
@@ -155,6 +217,18 @@ class LocalOCR:
                 cand_crops = [self._rotate_crop(crop, ang) for ang in unique_angles]
                 cand_rec, _ = self.engine.text_recognizer(cand_crops)
 
+                # Check if base angle 0 has confident numeric text to avoid upside-down flips
+                if 0 in unique_angles:
+                    idx_0 = unique_angles.index(0)
+                    txt_0, conf_0 = cand_rec[idx_0][0], float(cand_rec[idx_0][1])
+                    if conf_0 >= 0.5 and self._is_numeric_or_symbol(txt_0):
+                        best_txt = txt_0
+                        best_conf = conf_0
+                        if best_conf >= self.engine.text_score and best_txt:
+                            box_data = box.tolist() if hasattr(box, "tolist") else box
+                            results.append([box_data, best_txt, str(best_conf)])
+                        continue
+
                 best_txt = ""
                 best_conf = 0.0
                 best_score = -1.0
@@ -189,27 +263,83 @@ class LocalOCR:
 
         # Fallback 2: if detector found 0 boxes and orthogonal comparison is enabled, check 90/180/270 image rotation
         if (dt_boxes is None or len(dt_boxes) < 1) and self.compare_orthogonal_base:
+            best_rot = 0
+            best_boxes = None
+            best_img = img
             for rot_deg, rot_flag in [
                 (90, cv2.ROTATE_90_CLOCKWISE),
                 (180, cv2.ROTATE_180),
                 (270, cv2.ROTATE_90_COUNTERCLOCKWISE)
             ]:
                 rot_img = cv2.rotate(img, rot_flag)
-                dt_boxes_rot, _ = self.engine.text_detector(rot_img)
-                if dt_boxes_rot is not None and len(dt_boxes_rot) >= 1:
-                    rot_results = self._recognize_boxes(rot_img, self.engine.sorted_boxes(dt_boxes_rot))
-                    if rot_results:
-                        unrot_results = []
-                        for item in rot_results:
-                            unrot_poly = self._unrotate_polygon(item[0], rot_deg, w_orig, h_orig)
-                            unrot_results.append([unrot_poly, item[1], item[2]])
-                        return unrot_results
+                boxes_rot, _ = self.engine.text_detector(rot_img)
+                if boxes_rot is not None and len(boxes_rot) >= 1:
+                    best_rot = rot_deg
+                    best_boxes = boxes_rot
+                    best_img = rot_img
+                    break
+            if best_boxes is None:
+                return None
+            dt_boxes = best_boxes
+            img = best_img
+            consensus_rot = best_rot
+        else:
+            consensus_rot = self._determine_page_consensus(img, dt_boxes)
 
-        if dt_boxes is None or len(dt_boxes) < 1:
+        if consensus_rot != 0:
+            if consensus_rot == 90:
+                upright_img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+            elif consensus_rot == 180:
+                upright_img = cv2.rotate(img, cv2.ROTATE_180)
+            elif consensus_rot == 270:
+                upright_img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            else:
+                upright_img = img
+
+            upright_boxes, _ = self.engine.text_detector(upright_img)
+            if upright_boxes is None or len(upright_boxes) < 1:
+                upright_boxes = dt_boxes
+                upright_img = img
+                consensus_rot = 0
+        else:
+            upright_img = img
+            upright_boxes = dt_boxes
+
+        upright_boxes = self.engine.sorted_boxes(upright_boxes)
+        crops = self.engine.get_crop_img_list(upright_img, upright_boxes)
+        if not crops:
             return None
 
-        dt_boxes = self.engine.sorted_boxes(dt_boxes)
-        return self._recognize_boxes(img, dt_boxes)
+        # Recognize crops upright
+        rec_res, _ = self.engine.text_recognizer(crops)
+
+        results = []
+        for i, (box, (txt, conf)) in enumerate(zip(upright_boxes, rec_res)):
+            c_conf = float(conf)
+            best_txt = txt
+            best_conf = c_conf
+
+            # Only check alternative angles for individual low-confidence non-numeric crops
+            if best_conf < self.engine.text_score and self.compare_orthogonal_base and not self._is_numeric_or_symbol(txt):
+                crop = crops[i]
+                cand_crops = [self._rotate_crop(crop, ang) for ang in [90, 180, 270]]
+                cand_rec, _ = self.engine.text_recognizer(cand_crops)
+                best_score = self._score_candidate(best_txt, best_conf)
+                for ang, (c_txt, c_c) in zip([90, 180, 270], cand_rec):
+                    c_cf = float(c_c)
+                    s = self._score_candidate(c_txt, c_cf)
+                    if s > best_score:
+                        best_score = s
+                        best_txt = c_txt
+                        best_conf = c_cf
+
+            if best_conf >= self.engine.text_score and best_txt:
+                box_data = box.tolist() if hasattr(box, "tolist") else box
+                if consensus_rot != 0:
+                    box_data = self._unrotate_polygon(box_data, consensus_rot, w_orig, h_orig)
+                results.append([box_data, best_txt, str(best_conf)])
+
+        return results if results else None
 
     def process(
         self,

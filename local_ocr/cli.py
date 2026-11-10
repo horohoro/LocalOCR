@@ -135,6 +135,10 @@ def cmd_batch(args) -> int:
         print(f"No matching files found in {args.directory} with extensions {args.extensions}")
         return 0
 
+    def natural_sort_key(s: str):
+        return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', s)]
+    matched_files.sort(key=natural_sort_key)
+
     print(f"Processing {len(matched_files)} file(s)...")
     engine = LocalOCR(
         lang=getattr(args, "lang", "ch"),
